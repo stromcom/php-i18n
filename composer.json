@@ -1,0 +1,58 @@
+{
+    "name": "stromcom/php-i18n",
+    "description": "Translator.stromcom.cz client + AST-based scanner for PHP / Twig / XSLT sources. Runtime t() helper, PSR-15 locale middleware, Symfony Console workflow. Zero regex on sources.",
+    "type": "library",
+    "license": "proprietary",
+    "require": {
+        "php": "^8.4",
+        "ext-dom": "*",
+        "ext-json": "*",
+        "ext-libxml": "*",
+        "psr/container": "^2.0",
+        "psr/http-message": "^2.0",
+        "psr/http-server-handler": "^1.0",
+        "psr/http-server-middleware": "^1.0",
+        "psr/log": "^3.0",
+        "nikic/php-parser": "^5.0",
+        "php-di/php-di": "^7.0",
+        "symfony/console": "^7.0|^8.0",
+        "symfony/http-client": "^7.0|^8.0",
+        "symfony/http-client-contracts": "^3.0",
+        "twig/twig": "^3.0"
+    },
+    "require-dev": {
+        "phpstan/phpstan": "^2.0",
+        "phpstan/phpstan-strict-rules": "^2.0",
+        "phpunit/phpunit": "^11.0|^12.0|^13.0"
+    },
+    "suggest": {
+        "ext-intl": "Required for ICU plural / number formatting via MessageFormatter; without it the runtime falls back to plain {var} substitution via strtr() (no plurals).",
+        "ext-xsl": "Required for XsltScanner and XsltRenderer (XSLT-based templates). Without it those classes will throw 'XSLTProcessor not found' on first use — but auth.stromcom.cz / Twig-only projects do not need it."
+    },
+    "autoload": {
+        "psr-4": {
+            "Stromcom\\I18n\\": "src/"
+        }
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "Stromcom\\I18n\\Tests\\": "tests/"
+        }
+    },
+    "scripts": {
+        "test": "phpunit -c tests/phpunit.xml.dist",
+        "stan": "phpstan analyse --memory-limit=512M",
+        "ca": [
+            "@stan",
+            "@test"
+        ]
+    },
+    "config": {
+        "sort-packages": true
+    },
+    "extra": {
+        "branch-alias": {
+            "dev-master": "0.1.x-dev"
+        }
+    }
+}
