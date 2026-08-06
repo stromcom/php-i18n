@@ -133,26 +133,48 @@ Value Templates (AVTs) — XPath expressions. ICU placeholders such as `{name}` 
 `{count, plural, ...}` therefore **must be doubled to `{{name}}`** / `{{count, ...}}`.
 This is the XSLT 1.0 standard.
 
-A safer alternative when the ICU template has too many curly braces to escape: use
-`<xsl:attribute>`, whose text content is **not** an AVT:
+`XsltScanner` undoes that escaping, so the `source_text` synced to the platform is the
+real ICU pattern (`{count, plural, one {# item} other {# items}}`) rather than the
+doubled-brace spelling. Write the doubled form in the template and expect the collapsed
+form everywhere else.
 
-```xml
-<i18n:t key="greet">
-    <xsl:attribute name="default">Hello {name}</xsl:attribute>
-    <xsl:attribute name="name"><xsl:value-of select="$user_name"/></xsl:attribute>
-</i18n:t>
-```
+> **Do not use `<xsl:attribute>` for `key` / `default`.** Its text content is not an AVT,
+> so it avoids the doubling — but it is a child element, invisible to an attribute read.
+> Such a template **renders correctly while its key never reaches the platform**. The
+> scanner emits a warning naming the attribute instead of skipping in silence.
+>
+> ```xml
+> <!-- renders fine, but is never synced -->
+> <i18n:t key="greet">
+>     <xsl:attribute name="default">Hello {name}</xsl:attribute>
+> </i18n:t>
+>
+> <!-- write this instead -->
+> <i18n:t key="greet" default="Hello {{name}}" name="{$user_name}"/>
+> ```
+
+**Namespace matching is exact.** Both the scanner and the renderer resolve `<i18n:t/>` by
+namespace URI (`https://stromcom.cz/i18n`), never by prefix — any prefix bound to that URI
+works. A mistyped declaration (`http://` instead of `https://`) makes the scanner warn and
+the renderer throw `XsltRendererException`, rather than leaking a raw `<i18n:t/>` tag into
+the page.
 
 **Rules for `<i18n:t/>` attributes:**
 
 | Attribute | Meaning |
 |---|---|
-| `key` | Key identifier (required) |
-| `default` | Source text — ICU template (required) |
+| `key` | Key identifier (required, must be a literal — no AVT expression) |
+| `default` | Source text — ICU template (required, must be a literal) |
 | `note` | Metadata for translators — ignored by the runtime |
-| others | ICU `MessageFormatter` params (`{paramName}` in default) |
+| others | ICU `MessageFormatter` params (`{paramName}` in default); AVTs welcome here |
 
 An element without `key` or `default` → removed from the output (warning in the scanner if it passes the scan).
+A `key` or `default` holding an AVT expression (`key="{$dynamic}"`) cannot be synced — the
+scanner warns and skips it.
+
+Note that `omit-xml-declaration="yes"` has no effect for XML output: pass 2 re-serialises
+the post-processed DOM, so the declaration is always emitted. Use `method="html"` or strip
+it yourself if a bare fragment is required.
 
 ## CLI
 
@@ -169,8 +191,34 @@ composer i18n:status         # Coverage report (how many keys translated per loc
 
 ```bash
 composer install       # inside packages/stromcom-i18n/
-composer test          # PHPUnit (28 tests, AST scanners, runtime, BundleLoader)
+composer test          # PHPUnit — every src class has tests
 composer stan          # PHPStan level max + strict-rules → 0 errors
+composer coverage      # PHPUnit + text coverage report (needs pcov or xdebug)
+composer mutate        # Infection mutation testing (needs pcov or xdebug)
+composer ca            # stan + test
+```
+
+Test layout mirrors `src/`, plus:
+
+| Directory | Contents |
+|---|---|
+| `tests/Integration/` | Cross-class contracts — notably the XSLT scanner ⇄ renderer round-trip |
+| `tests/Support/` | Doubles: `TmpDir`, `CollectingLogger`, `HttpRecorder`, `RecordingScanner`, `InMemoryBundleLoader` |
+
+HTTP is exercised through `symfony/http-client`'s `MockHttpClient` (no network in the
+suite), console commands through `CommandTester`.
+
+`composer mutate` accepts the usual Infection arguments, so a single class can be probed
+in isolation:
+
+```bash
+composer mutate -- src/Scan/XsltScanner.php --show-mutations=max
+```
+
+Mutation testing needs a coverage driver and `ext-intl` for the ICU tests:
+
+```bash
+sudo apt install php8.4-pcov php8.4-intl   # match your PHP minor version
 ```
 Then in consumers' `composer.json`:
 

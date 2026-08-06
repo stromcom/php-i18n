@@ -1,0 +1,32 @@
+{
+    // Mutation testing. Requires a coverage driver (pcov or xdebug):
+    //   composer mutate            — full run, writes infection.log
+    //   composer mutate -- --filter=src/Scan/XsltScanner.php
+    $schema: "vendor/infection/infection/resources/schema.json",
+    source: {
+        directories: [
+            "src"
+        ],
+        excludes: [
+            // Thin DI wiring — it only assembles the classes tested elsewhere, so
+            // mutating it produces equivalent mutants.
+            "Config/I18nServiceProvider.php"
+        ]
+    },
+    timeout: 15,
+    testFramework: "phpunit",
+    // Infection injects its own --configuration; only the directory is needed here.
+    phpUnit: {
+        configDir: "tests"
+    },
+    logs: {
+        text: "infection.log",
+        summary: "infection-summary.log",
+        stryker: {
+            report: "master"
+        }
+    },
+    mutators: {
+        "@default": true
+    }
+}

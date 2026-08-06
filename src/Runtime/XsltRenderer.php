@@ -63,7 +63,14 @@ final readonly class XsltRenderer
             $xml = $this->loadData($data);
 
             $processor = new \XSLTProcessor();
-            $processor->importStylesheet($xsl);
+            // Returns false for a well-formed XML file that is not a stylesheet. Left
+            // unchecked, the following transformToDoc() raises a raw \Error instead of
+            // this package's exception type.
+            if ($processor->importStylesheet($xsl) === false) {
+                throw new XsltRendererException(
+                    'XSL stylesheet could not be imported: ' . $this->collectLibxmlErrors(),
+                );
+            }
             foreach ($xsltParams as $name => $value) {
                 $processor->setParameter('', $name, (string) $value);
             }
@@ -114,7 +121,10 @@ final readonly class XsltRenderer
 
     private function translatePass(\DOMDocument $intermediate, string $locale): void
     {
-        $xpath = new \DOMXPath($intermediate);
+        // registerNodeNS: false — a result root that declares the `i18n` prefix against a
+        // different URI must not shadow the registered binding. Resolution follows the
+        // namespace URI only, matching XsltScanner.
+        $xpath = new \DOMXPath($intermediate, false);
         $xpath->registerNamespace('i18n', XsltScanner::NAMESPACE_URI);
 
         $nodes = $xpath->query('//i18n:t');
@@ -152,6 +162,35 @@ final readonly class XsltRenderer
                 $parent->replaceChild($textNode, $element);
             }
         }
+
+        $this->assertNoUnresolvedElements($xpath);
+    }
+
+    /**
+     * A `<t key= default=>` element left in the result tree means its namespace does not
+     * match `XsltScanner::NAMESPACE_URI` — nearly always a mistyped `xmlns:i18n`
+     * declaration. Serialising it would emit a raw `<i18n:t .../>` tag into the page and
+     * drop the text entirely, so fail loudly instead.
+     */
+    private function assertNoUnresolvedElements(\DOMXPath $xpath): void
+    {
+        $leftovers = $xpath->query(
+            '//*[local-name()="t" and namespace-uri()!="' . XsltScanner::NAMESPACE_URI . '" and @key and @default]',
+        );
+        if ($leftovers === false || $leftovers->length === 0) {
+            return;
+        }
+
+        $first = $leftovers->item(0);
+        $found = $first instanceof \DOMElement ? ($first->namespaceURI ?? '(none)') : '(unknown)';
+        $key = $first instanceof \DOMElement ? $first->getAttribute('key') : '';
+
+        throw new XsltRendererException(sprintf(
+            'Unresolved <t> element in the result tree (key "%s"): namespace is "%s", expected "%s" — check the xmlns:i18n declaration in the stylesheet.',
+            $key,
+            $found,
+            XsltScanner::NAMESPACE_URI,
+        ));
     }
 
     /**

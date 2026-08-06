@@ -27,11 +27,28 @@ final class TmpDir
         return $this->path;
     }
 
+    /**
+     * Writes a file, creating intermediate directories so `$name` may contain slashes
+     * (`src/templates/page.xsl`).
+     */
     public function write(string $name, string $content): string
     {
         $abs = $this->path . '/' . $name;
+        $dir = dirname($abs);
+        if (!is_dir($dir) && !mkdir($dir, 0o700, true) && !is_dir($dir)) {
+            throw new \RuntimeException('Cannot create tmp subdir: ' . $dir);
+        }
         if (file_put_contents($abs, $content) === false) {
             throw new \RuntimeException('Cannot write tmp file: ' . $abs);
+        }
+        return $abs;
+    }
+
+    public function mkdir(string $name): string
+    {
+        $abs = $this->path . '/' . $name;
+        if (!is_dir($abs) && !mkdir($abs, 0o700, true) && !is_dir($abs)) {
+            throw new \RuntimeException('Cannot create tmp subdir: ' . $abs);
         }
         return $abs;
     }
@@ -43,15 +60,25 @@ final class TmpDir
 
     public function cleanup(): void
     {
-        if (!is_dir($this->path)) {
+        $this->removeTree($this->path);
+    }
+
+    private function removeTree(string $dir): void
+    {
+        if (!is_dir($dir)) {
             return;
         }
-        $entries = glob($this->path . '/*');
+        $entries = glob($dir . '/*');
         if ($entries !== false) {
             foreach ($entries as $entry) {
+                if (is_dir($entry)) {
+                    $this->removeTree($entry);
+                    continue;
+                }
+                @chmod($entry, 0o600);
                 @unlink($entry);
             }
         }
-        @rmdir($this->path);
+        @rmdir($dir);
     }
 }

@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Stromcom\I18n\Tests\Runtime;
 
 use PHPUnit\Framework\Attributes\CoversClass;
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 use Psr\Log\NullLogger;
 use Stromcom\I18n\Config\I18nConfig;
@@ -164,6 +165,41 @@ final class XsltRendererTest extends TestCase
         self::assertStringNotContainsString('i18n:t', $output);
     }
 
+    public function testElementWithDefaultButNoKeyIsRemoved(): void
+    {
+        $body = '<p>before<i18n:t default="orphan default"/>after</p>';
+        $xslPath = $this->tmp->write('stylesheet.xsl', $this->buildStylesheet($body));
+
+        $output = $this->makeRenderer(['cs' => []])->render($xslPath, '<?xml version="1.0"?><data/>');
+
+        self::assertStringContainsString('<p>beforeafter</p>', $output);
+        self::assertStringNotContainsString('orphan default', $output);
+    }
+
+    public function testElementWithEmptyKeyAndDefaultIsRemoved(): void
+    {
+        $body = '<p>before<i18n:t key="" default=""/>after</p>';
+        $xslPath = $this->tmp->write('stylesheet.xsl', $this->buildStylesheet($body));
+
+        $output = $this->makeRenderer(['cs' => []])->render($xslPath, '<?xml version="1.0"?><data/>');
+
+        self::assertStringContainsString('<p>beforeafter</p>', $output);
+    }
+
+    public function testCompleteElementsSurviveAlongsideAnIncompleteOne(): void
+    {
+        $body = '<root><p><i18n:t key="ok" default="Fine"/></p><p><i18n:t key="bad"/></p></root>';
+        $xslPath = $this->tmp->write('stylesheet.xsl', $this->buildStylesheet($body));
+
+        $output = $this->makeRenderer(['cs' => ['ok' => 'Dobré']])->render(
+            $xslPath,
+            '<?xml version="1.0"?><data/>',
+        );
+
+        self::assertStringContainsString('<p>Dobré</p>', $output);
+        self::assertStringContainsString('<p/>', $output);
+    }
+
     public function testLocaleParameterOverridesContext(): void
     {
         $body = '<p><i18n:t key="hi" default="Hi"/></p>';
@@ -250,5 +286,391 @@ final class XsltRendererTest extends TestCase
         // saveHTML output: no XML declaration, doctype need not be present
         self::assertStringContainsString('<h1>Hello</h1>', $output);
         self::assertStringNotContainsString('<?xml', $output);
+    }
+
+    // ------------------------------------------------------------ output format
+
+    public function testTextOutputMethodDetectedFromStylesheet(): void
+    {
+        $body = '<root><h1><i18n:t key="a" default="Alpha"/></h1><p><i18n:t key="b" default="Beta"/></p></root>';
+        $xsl = $this->buildStylesheet($body, outputMethod: 'text');
+        $xslPath = $this->tmp->write('stylesheet.xsl', $xsl);
+
+        $renderer = $this->makeRenderer(['cs' => ['a' => 'Alfa']]);
+        $output = $renderer->render($xslPath, '<?xml version="1.0"?><data/>');
+
+        self::assertSame('AlfaBeta', $output);
+    }
+
+    public function testExplicitOutputFormatOverridesStylesheetDeclaration(): void
+    {
+        $body = '<root><p><i18n:t key="a" default="Alpha"/></p></root>';
+        $xsl = $this->buildStylesheet($body, outputMethod: 'xml');
+        $xslPath = $this->tmp->write('stylesheet.xsl', $xsl);
+        $renderer = $this->makeRenderer(['cs' => []]);
+
+        $asText = $renderer->render($xslPath, '<?xml version="1.0"?><data/>', outputFormat: 'text');
+        $asHtml = $renderer->render($xslPath, '<?xml version="1.0"?><data/>', outputFormat: 'html');
+        $asXml = $renderer->render($xslPath, '<?xml version="1.0"?><data/>');
+
+        self::assertSame('Alpha', $asText);
+        self::assertStringNotContainsString('<?xml', $asHtml);
+        self::assertStringContainsString('<?xml', $asXml);
+    }
+
+    /**
+     * `detectOutputFormat` only recognises html and text; everything else — including
+     * an absent declaration or `method="xhtml"` — is XSLT 1.0's default, XML.
+     */
+    #[DataProvider('nonHtmlOutputDeclarationProvider')]
+    public function testUnrecognisedOutputMethodFallsBackToXml(string $outputDeclaration): void
+    {
+        $xsl = <<<XML
+        <?xml version="1.0" encoding="UTF-8"?>
+        <xsl:stylesheet version="1.0"
+                        xmlns:xsl="http://www.w3.org/1999/XSL/Transform"
+                        xmlns:i18n="https://stromcom.cz/i18n"
+                        exclude-result-prefixes="i18n">
+            {$outputDeclaration}
+            <xsl:template match="/"><root><i18n:t key="a" default="Alpha"/></root></xsl:template>
+        </xsl:stylesheet>
+        XML;
+        $xslPath = $this->tmp->write('stylesheet.xsl', $xsl);
+
+        $output = $this->makeRenderer(['cs' => []])->render($xslPath, '<?xml version="1.0"?><data/>');
+
+        self::assertStringContainsString('<?xml', $output);
+        self::assertStringContainsString('<root>Alpha</root>', $output);
+    }
+
+    /**
+     * @return iterable<string, array{string}>
+     */
+    public static function nonHtmlOutputDeclarationProvider(): iterable
+    {
+        yield 'no xsl:output'      => [''];
+        yield 'method="xml"'       => ['<xsl:output method="xml" encoding="UTF-8"/>'];
+        yield 'method="xhtml"'     => ['<xsl:output method="xhtml" encoding="UTF-8"/>'];
+        yield 'output without method' => ['<xsl:output encoding="UTF-8" indent="no"/>'];
+        yield 'uppercase HTML is matched case-insensitively, so use XML' => [
+            '<xsl:output method="XML" encoding="UTF-8"/>',
+        ];
+    }
+
+    public function testOutputMethodMatchIsCaseInsensitive(): void
+    {
+        $body = '<html><body><h1><i18n:t key="t" default="Hello"/></h1></body></html>';
+        $xsl = $this->buildStylesheet($body, outputMethod: 'HTML');
+        $xslPath = $this->tmp->write('stylesheet.xsl', $xsl);
+
+        $output = $this->makeRenderer(['cs' => []])->render($xslPath, '<?xml version="1.0"?><data/>');
+
+        self::assertStringNotContainsString('<?xml', $output);
+    }
+
+    // -------------------------------------------------------------- data input
+
+    public function testAcceptsDomDocumentAsData(): void
+    {
+        $body = '<p><i18n:t key="a" default="A"/>:<xsl:value-of select="/data/@v"/></p>';
+        $xslPath = $this->tmp->write('stylesheet.xsl', $this->buildStylesheet($body));
+
+        $data = new \DOMDocument();
+        self::assertTrue($data->loadXML('<?xml version="1.0"?><data v="42"/>'));
+
+        $output = $this->makeRenderer(['cs' => ['a' => 'Á']])->render($xslPath, $data);
+
+        self::assertStringContainsString('<p>Á:42</p>', $output);
+    }
+
+    // ---------------------------------------------------- variables and params
+
+    /**
+     * The `<xsl:variable>` → AVT → ICU parameter path: the variable is resolved during
+     * pass 1, so pass 2 receives a concrete string.
+     */
+    public function testXslVariableFeedsIcuParameterThroughAvt(): void
+    {
+        $body = '<xsl:variable name="who" select="\'Petr\'"/>'
+              . '<p><i18n:t key="greet" default="Hello {{name}}" name="{$who}"/></p>';
+        $xslPath = $this->tmp->write('stylesheet.xsl', $this->buildStylesheet($body));
+
+        $output = $this->makeRenderer(['cs' => []])->render($xslPath, '<?xml version="1.0"?><data/>');
+
+        self::assertStringContainsString('<p>Hello Petr</p>', $output);
+    }
+
+    public function testAvtParameterFromXmlNodeValue(): void
+    {
+        $body = '<p><i18n:t key="greet" default="Hello {{name}}" name="{/data/customer/@firstName}"/></p>';
+        $xslPath = $this->tmp->write('stylesheet.xsl', $this->buildStylesheet($body));
+
+        $output = $this->makeRenderer(['cs' => []])->render(
+            $xslPath,
+            '<?xml version="1.0"?><data><customer firstName="Jana"/></data>',
+        );
+
+        self::assertStringContainsString('<p>Hello Jana</p>', $output);
+    }
+
+    public function testAvtParameterFromMissingNodeBecomesEmptyString(): void
+    {
+        $body = '<p><i18n:t key="greet" default="Hello {{name}}!" name="{/data/@nope}"/></p>';
+        $xslPath = $this->tmp->write('stylesheet.xsl', $this->buildStylesheet($body));
+
+        $output = $this->makeRenderer(['cs' => []])->render($xslPath, '<?xml version="1.0"?><data/>');
+
+        self::assertStringContainsString('<p>Hello !</p>', $output);
+    }
+
+    public function testNonStringXsltParametersAreCastToString(): void
+    {
+        $xsl = <<<'XML'
+        <?xml version="1.0" encoding="UTF-8"?>
+        <xsl:stylesheet version="1.0"
+                        xmlns:xsl="http://www.w3.org/1999/XSL/Transform"
+                        xmlns:i18n="https://stromcom.cz/i18n"
+                        exclude-result-prefixes="i18n">
+            <xsl:output method="xml" indent="no" omit-xml-declaration="yes" encoding="UTF-8"/>
+            <xsl:param name="count"/>
+            <xsl:param name="ratio"/>
+            <xsl:param name="flag"/>
+            <xsl:template match="/">
+                <p><xsl:value-of select="$count"/>|<xsl:value-of select="$ratio"/>|<xsl:value-of select="$flag"/></p>
+            </xsl:template>
+        </xsl:stylesheet>
+        XML;
+        $xslPath = $this->tmp->write('stylesheet.xsl', $xsl);
+
+        $output = $this->makeRenderer(['cs' => []])->render(
+            $xslPath,
+            '<?xml version="1.0"?><data/>',
+            xsltParams: ['count' => 7, 'ratio' => 1.5, 'flag' => true],
+        );
+
+        self::assertStringContainsString('<p>7|1.5|1</p>', $output);
+    }
+
+    public function testSameKeyRenderedTwiceWithDifferentParameters(): void
+    {
+        $body = '<root>'
+              . '<p><i18n:t key="greet" default="Hi {{name}}" name="{/data/a/@n}"/></p>'
+              . '<p><i18n:t key="greet" default="Hi {{name}}" name="{/data/b/@n}"/></p>'
+              . '</root>';
+        $xslPath = $this->tmp->write('stylesheet.xsl', $this->buildStylesheet($body));
+
+        $output = $this->makeRenderer(['cs' => ['greet' => 'Ahoj {name}']])->render(
+            $xslPath,
+            '<?xml version="1.0"?><data><a n="Jana"/><b n="Petr"/></data>',
+        );
+
+        self::assertStringContainsString('<p>Ahoj Jana</p>', $output);
+        self::assertStringContainsString('<p>Ahoj Petr</p>', $output);
+    }
+
+    public function testTranslatesEveryIterationOfForEach(): void
+    {
+        $body = '<ul><xsl:for-each select="/data/row">'
+              . '<li><i18n:t key="row.label" default="Row {{n}}" n="{@n}"/></li>'
+              . '</xsl:for-each></ul>';
+        $xslPath = $this->tmp->write('stylesheet.xsl', $this->buildStylesheet($body));
+
+        $output = $this->makeRenderer(['cs' => ['row.label' => 'Řádek {n}']])->render(
+            $xslPath,
+            '<?xml version="1.0"?><data><row n="1"/><row n="2"/><row n="3"/></data>',
+        );
+
+        self::assertStringContainsString('<li>Řádek 1</li>', $output);
+        self::assertStringContainsString('<li>Řádek 2</li>', $output);
+        self::assertStringContainsString('<li>Řádek 3</li>', $output);
+    }
+
+    // ------------------------------------------------------------- escaping
+
+    /**
+     * Translations become text nodes, never markup — a translated string containing
+     * `<b>` must not turn into an element.
+     */
+    public function testTranslationContainingMarkupIsEscaped(): void
+    {
+        $body = '<p><i18n:t key="m" default="plain"/></p>';
+        $xslPath = $this->tmp->write('stylesheet.xsl', $this->buildStylesheet($body));
+
+        $output = $this->makeRenderer(['cs' => ['m' => '<b>bold</b> & "quoted"']])->render(
+            $xslPath,
+            '<?xml version="1.0"?><data/>',
+        );
+
+        self::assertStringContainsString('&lt;b&gt;bold&lt;/b&gt; &amp;', $output);
+        self::assertStringNotContainsString('<b>', $output);
+    }
+
+    public function testNonAsciiTranslationIsNotEscapedToNumericEntities(): void
+    {
+        $body = '<p><i18n:t key="cz" default="d"/></p>';
+        $xslPath = $this->tmp->write('stylesheet.xsl', $this->buildStylesheet($body));
+
+        $output = $this->makeRenderer(['cs' => ['cz' => 'Příliš žluťoučký kůň']])->render(
+            $xslPath,
+            '<?xml version="1.0"?><data/>',
+        );
+
+        self::assertStringContainsString('Příliš žluťoučký kůň', $output);
+        self::assertStringNotContainsString('&#', $output);
+    }
+
+    public function testI18nTAsResultTreeRootIsReplaced(): void
+    {
+        $xslPath = $this->tmp->write(
+            'stylesheet.xsl',
+            $this->buildStylesheet('<i18n:t key="root" default="RootText"/>'),
+        );
+
+        $output = $this->makeRenderer(['cs' => ['root' => 'Koren']])->render(
+            $xslPath,
+            '<?xml version="1.0"?><data/>',
+        );
+
+        self::assertStringContainsString('Koren', $output);
+        self::assertStringNotContainsString('i18n:t', $output);
+    }
+
+    // ------------------------------------------------------------ error paths
+
+    public function testThrowsWhenStylesheetIsWellFormedXmlButNotAStylesheet(): void
+    {
+        $xslPath = $this->tmp->write('stylesheet.xsl', '<?xml version="1.0"?><notxsl/>');
+        $renderer = $this->makeRenderer([]);
+
+        $this->expectException(XsltRendererException::class);
+        $this->expectExceptionMessage('XSL stylesheet could not be imported');
+        $renderer->render($xslPath, '<?xml version="1.0"?><data/>');
+    }
+
+    public function testThrowsOnMalformedStylesheetXml(): void
+    {
+        $xslPath = $this->tmp->write('stylesheet.xsl', '<xsl:stylesheet><broken');
+        $renderer = $this->makeRenderer([]);
+
+        $this->expectException(XsltRendererException::class);
+        $this->expectExceptionMessage('XSL stylesheet parse error');
+        $renderer->render($xslPath, '<?xml version="1.0"?><data/>');
+    }
+
+    public function testThrowsOnUnreadableStylesheet(): void
+    {
+        $xslPath = $this->tmp->write('stylesheet.xsl', $this->buildStylesheet('<root/>'));
+        self::assertTrue(chmod($xslPath, 0o000));
+        $renderer = $this->makeRenderer([]);
+
+        try {
+            $this->expectException(XsltRendererException::class);
+            $this->expectExceptionMessage('XSL stylesheet not readable');
+            $renderer->render($xslPath, '<?xml version="1.0"?><data/>');
+        } finally {
+            chmod($xslPath, 0o600);
+        }
+    }
+
+    public function testThrowsOnDirectoryPassedAsStylesheet(): void
+    {
+        $renderer = $this->makeRenderer([]);
+
+        $this->expectException(XsltRendererException::class);
+        $this->expectExceptionMessage('XSL stylesheet not readable');
+        $renderer->render($this->tmp->path(), '<?xml version="1.0"?><data/>');
+    }
+
+    /**
+     * A mistyped `xmlns:i18n` used to leave a raw `<i18n:t .../>` tag in the output and
+     * silently drop the text. It must fail loudly instead.
+     */
+    public function testThrowsWhenElementNamespaceDoesNotMatch(): void
+    {
+        $xsl = <<<'XML'
+        <?xml version="1.0" encoding="UTF-8"?>
+        <xsl:stylesheet version="1.0"
+                        xmlns:xsl="http://www.w3.org/1999/XSL/Transform"
+                        xmlns:i18n="http://stromcom.cz/i18n"
+                        exclude-result-prefixes="i18n">
+            <xsl:output method="xml" omit-xml-declaration="yes" encoding="UTF-8"/>
+            <xsl:template match="/"><p><i18n:t key="typo.ns" default="WrongNs"/></p></xsl:template>
+        </xsl:stylesheet>
+        XML;
+        $xslPath = $this->tmp->write('stylesheet.xsl', $xsl);
+        $renderer = $this->makeRenderer(['cs' => []]);
+
+        $this->expectException(XsltRendererException::class);
+        $this->expectExceptionMessage('Unresolved <t> element');
+        $this->expectExceptionMessage('typo.ns');
+        $renderer->render($xslPath, '<?xml version="1.0"?><data/>');
+    }
+
+    /**
+     * The renderer resolves by namespace URI, so a result root that binds the `i18n`
+     * prefix to some other URI must not hijack resolution.
+     */
+    public function testResolutionFollowsNamespaceUriNotPrefix(): void
+    {
+        $xsl = <<<'XML'
+        <?xml version="1.0" encoding="UTF-8"?>
+        <xsl:stylesheet version="1.0"
+                        xmlns:xsl="http://www.w3.org/1999/XSL/Transform"
+                        xmlns:tr="https://stromcom.cz/i18n"
+                        exclude-result-prefixes="tr">
+            <xsl:output method="xml" omit-xml-declaration="yes" encoding="UTF-8"/>
+            <xsl:template match="/"><p><tr:t key="hi" default="Hi"/></p></xsl:template>
+        </xsl:stylesheet>
+        XML;
+        $xslPath = $this->tmp->write('stylesheet.xsl', $xsl);
+
+        $output = $this->makeRenderer(['cs' => ['hi' => 'Ahoj']])->render(
+            $xslPath,
+            '<?xml version="1.0"?><data/>',
+        );
+
+        self::assertStringContainsString('<p>Ahoj</p>', $output);
+    }
+
+    public function testForeignTElementWithoutKeyAndDefaultIsLeftAlone(): void
+    {
+        $body = '<root><t>not ours</t><p><i18n:t key="a" default="A"/></p></root>';
+        $xslPath = $this->tmp->write('stylesheet.xsl', $this->buildStylesheet($body));
+
+        $output = $this->makeRenderer(['cs' => []])->render($xslPath, '<?xml version="1.0"?><data/>');
+
+        self::assertStringContainsString('<t>not ours</t>', $output);
+        self::assertStringContainsString('<p>A</p>', $output);
+    }
+
+    public function testLibxmlErrorStateIsRestoredAfterRender(): void
+    {
+        $xslPath = $this->tmp->write('stylesheet.xsl', $this->buildStylesheet('<root/>'));
+        $renderer = $this->makeRenderer(['cs' => []]);
+
+        $before = libxml_use_internal_errors(false);
+        try {
+            $renderer->render($xslPath, '<?xml version="1.0"?><data/>');
+            self::assertFalse(libxml_use_internal_errors(), 'render() must restore the previous libxml mode');
+        } finally {
+            libxml_use_internal_errors($before);
+        }
+    }
+
+    public function testLibxmlErrorStateIsRestoredAfterFailedRender(): void
+    {
+        $renderer = $this->makeRenderer([]);
+
+        $before = libxml_use_internal_errors(false);
+        try {
+            try {
+                $renderer->render('/nonexistent/stylesheet.xsl', '<?xml version="1.0"?><data/>');
+                self::fail('Expected XsltRendererException');
+            } catch (XsltRendererException) {
+                self::assertFalse(libxml_use_internal_errors());
+            }
+        } finally {
+            libxml_use_internal_errors($before);
+        }
     }
 }

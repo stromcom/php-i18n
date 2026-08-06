@@ -5,3 +5,6 @@
 /phpunit.xml
 /phpstan.neon
 /.phpstan.cache/
+/infection.log
+/infection-summary.log
+/.infection-cache/

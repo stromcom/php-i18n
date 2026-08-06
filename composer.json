@@ -21,6 +21,7 @@
         "twig/twig": "^3.0"
     },
     "require-dev": {
+        "infection/infection": "^0.34.1",
         "phpstan/phpstan": "^2.0",
         "phpstan/phpstan-strict-rules": "^2.0",
         "phpunit/phpunit": "^11.0|^12.0|^13.0"
@@ -42,13 +43,18 @@
     "scripts": {
         "test": "phpunit -c tests/phpunit.xml.dist",
         "stan": "phpstan analyse --memory-limit=512M",
+        "coverage": "phpunit -c tests/phpunit.xml.dist --coverage-text",
+        "mutate": "infection --threads=max",
         "ca": [
             "@stan",
             "@test"
         ]
     },
     "config": {
-        "sort-packages": true
+        "sort-packages": true,
+        "allow-plugins": {
+            "infection/extension-installer": true
+        }
     },
     "extra": {
         "branch-alias": {

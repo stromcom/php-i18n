@@ -74,7 +74,9 @@ final readonly class BundleFetcher
 
         $bundlePath = $this->config->bundlePath($locale);
         $dir = dirname($bundlePath);
-        if (!is_dir($dir) && !mkdir($dir, 0o775, true) && !is_dir($dir)) {
+        // Suppressed: the failure is reported through the exception below, and the raw
+        // "mkdir(): Not a directory" warning adds nothing but noise to the CI log.
+        if (!is_dir($dir) && !@mkdir($dir, 0o775, true) && !is_dir($dir)) {
             throw new TranslatorClientException('Cannot create bundles dir: ' . $dir);
         }
         if (file_put_contents($bundlePath, $body) === false) {
