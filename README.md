@@ -245,8 +245,13 @@ Then in consumers' `composer.json`:
 
 | File | Purpose | Who reads it |
 |---|---|---|
-| `build/locales/<locale>.json` | Source of truth, raw response from the translator (wrapped `{version, locale, translations: {...}}`) | `BundleLoader` as a fallback, debugging |
+| `build/locales/<locale>.json` | Source of truth, flat `{key: text}` map with sorted keys | `BundleLoader` as a fallback, debugging |
 | `build/locales/<locale>.cache.php` | `<?php return [flat-map]` via `var_export` | OPcache hot path — `require` caches bytecode in shared memory, no `json_decode` |
+
+The response envelope (`{version, locale, generated_at, translations}`) is **not** stored: bundles
+are committed build inputs, and `generated_at` would change the file on every fetch, so no publish
+gate could compare a committed bundle against the published one. `BundleLoader` still accepts the
+wrapped shape, so hand-written or legacy bundles keep working.
 
 `BundleLoader` tries `.cache.php` first **only if its mtime is ≥ the JSON**. After `i18n:fetch`
 the mtimes are synced (via `touch()`). If someone manually edits the JSON (mtime > PHP cache),

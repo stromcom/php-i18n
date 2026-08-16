@@ -77,14 +77,28 @@ final class BundleFetcherTest extends TestCase
     /**
      * @param array<string, string> $translations
      */
-    private function bundleBody(array $translations, string $locale = 'cs'): string
-    {
+    private function bundleBody(
+        array $translations,
+        string $locale = 'cs',
+        string $generatedAt = '2026-01-01T00:00:00Z',
+    ): string {
         return json_encode([
             'version'      => 3,
             'locale'       => $locale,
-            'generated_at' => '2026-01-01T00:00:00Z',
+            'generated_at' => $generatedAt,
             'translations' => $translations,
         ], JSON_THROW_ON_ERROR);
+    }
+
+    /**
+     * @return array<string, string>
+     */
+    private function writtenBundle(string $locale = 'cs'): array
+    {
+        /** @var array<string, string> $decoded */
+        $decoded = json_decode((string) file_get_contents($this->bundlesDir() . "/$locale.json"), true, 8, JSON_THROW_ON_ERROR);
+
+        return $decoded;
     }
 
     // ------------------------------------------------------------ happy path
@@ -99,7 +113,56 @@ final class BundleFetcherTest extends TestCase
         self::assertTrue($result->written);
         self::assertSame(200, $result->status);
         self::assertSame('cs', $result->locale);
-        self::assertStringEqualsFile($this->bundlesDir() . '/cs.json', $body);
+        self::assertSame(['a' => 'A'], $this->writtenBundle());
+    }
+
+    // ------------------------------------------------- deterministic on disk
+
+    public function testWritesOnlyTheFlatTranslationsMapWithoutTheEnvelope(): void
+    {
+        $this->fetcher(new MockResponse($this->bundleBody(['a' => 'A'])))->fetch('cs');
+
+        $json = (string) file_get_contents($this->bundlesDir() . '/cs.json');
+        self::assertStringNotContainsString('generated_at', $json);
+        self::assertStringNotContainsString('translations', $json);
+        self::assertStringEndsWith("\n", $json);
+    }
+
+    public function testSortsKeysSoThatResponseOrderDoesNotChangeTheFile(): void
+    {
+        $this->fetcher(new MockResponse($this->bundleBody(['b' => 'B', 'a' => 'A'])))->fetch('cs');
+
+        self::assertSame(['a', 'b'], array_keys($this->writtenBundle()));
+    }
+
+    public function testTwoFetchesOfTheSameContentProduceIdenticalBytes(): void
+    {
+        // Bundle files are committed build inputs — a publish gate compares them
+        // against the published version, so an unstable byte for byte result
+        // (fetch timestamp, key order) would make that comparison always fail.
+        $this->fetcher(new MockResponse($this->bundleBody(['a' => 'A'], generatedAt: '2026-01-01T00:00:00Z')))->fetch('cs');
+        $first = (string) file_get_contents($this->bundlesDir() . '/cs.json');
+
+        $this->fetcher(new MockResponse($this->bundleBody(['a' => 'A'], generatedAt: '2026-06-30T12:34:56Z')))->fetch('cs');
+        $second = (string) file_get_contents($this->bundlesDir() . '/cs.json');
+
+        self::assertSame($first, $second);
+    }
+
+    public function testEmptyBundleIsWrittenAsAnObjectNotAnArray(): void
+    {
+        $this->fetcher(new MockResponse($this->bundleBody([])))->fetch('cs');
+
+        self::assertStringEqualsFile($this->bundlesDir() . '/cs.json', "{}\n");
+    }
+
+    public function testAcceptsAFlatBodyWithoutTheEnvelope(): void
+    {
+        $body = json_encode(['b' => 'B', 'a' => 'A'], JSON_THROW_ON_ERROR);
+
+        $this->fetcher(new MockResponse($body))->fetch('cs');
+
+        self::assertSame(['a' => 'A', 'b' => 'B'], $this->writtenBundle());
     }
 
     public function testRequestsTheCorrectUrlWithTheVersionQuery(): void

@@ -13,6 +13,13 @@ use Symfony\Contracts\HttpClient\Exception\ExceptionInterface;
  * 304 Not Modified. On 304 it leaves the local file untouched. On 422 (missing
  * keys) it returns a result with a message — the caller (CI) should treat this
  * case as a fatal error.
+ *
+ * The bundle file is a build input that gets committed, so what lands on disk is
+ * the flat `{key: text}` map with sorted keys — not the raw response. The
+ * response envelope carries `generated_at` (and the ETag cache that would spare
+ * the write lives outside the repo), so writing it verbatim would produce
+ * different bytes on every fetch and no publish gate could ever compare the
+ * committed bundle against the published one.
  */
 final readonly class BundleFetcher
 {
@@ -79,11 +86,12 @@ final readonly class BundleFetcher
         if (!is_dir($dir) && !@mkdir($dir, 0o775, true) && !is_dir($dir)) {
             throw new TranslatorClientException('Cannot create bundles dir: ' . $dir);
         }
-        if (file_put_contents($bundlePath, $body) === false) {
+        $bundleJson = $this->canonicalJson($body);
+        if (file_put_contents($bundlePath, $bundleJson) === false) {
             throw new TranslatorClientException('Cannot write bundle file: ' . $bundlePath);
         }
 
-        $this->writePhpCache($locale, $body, $bundlePath);
+        $this->writePhpCache($locale, $bundleJson, $bundlePath);
 
         $etag = $this->headerLine($responseHeaders, 'etag');
         if ($etag !== null) {
@@ -92,7 +100,7 @@ final readonly class BundleFetcher
 
         $this->logger->info('[i18n] BundleFetcher: written', [
             'locale' => $locale,
-            'bytes'  => strlen($body),
+            'bytes'  => strlen($bundleJson),
             'path'   => $bundlePath,
         ]);
 
@@ -100,12 +108,48 @@ final readonly class BundleFetcher
     }
 
     /**
-     * Generates an OPcache-friendly `<?php return [...];` from the freshly
-     * downloaded JSON. The translator returns a wrapper
-     * `{ version, locale, generated_at, translations }` — only the flat
-     * `translations` map belongs in the PHP cache (it must mirror what
-     * `BundleLoader::normalize()` extracts, otherwise the mtime check would let
-     * an empty bundle through to runtime).
+     * The response is `{ version, locale, generated_at, translations }`; on disk
+     * we keep only the flat `translations` map, with keys sorted so that two
+     * fetches of the same published content produce byte-identical files. The
+     * envelope is dropped on purpose — `generated_at` changes every fetch and
+     * the rest is metadata the runtime never reads.
+     *
+     * A body that cannot be decoded is written through unchanged: the caller
+     * already has HTTP-level validation and a mangled file is easier to
+     * diagnose than a silently emptied one.
+     */
+    private function canonicalJson(string $body): string
+    {
+        try {
+            $decoded = json_decode($body, true, 8, JSON_THROW_ON_ERROR);
+        } catch (\JsonException) {
+            return $body;
+        }
+        if (!is_array($decoded)) {
+            return $body;
+        }
+
+        /** @var array<int|string, mixed> $translations */
+        $translations = (isset($decoded['translations']) && is_array($decoded['translations']))
+            ? $decoded['translations']
+            : $decoded;
+
+        ksort($translations);
+
+        // Empty bundle: `[]` in PHP encodes as a JSON array, but a bundle is
+        // always an object — the runtime and the offline check both read it as a map.
+        $payload = $translations === [] ? new \stdClass() : $translations;
+
+        return json_encode(
+            $payload,
+            JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR,
+        ) . "\n";
+    }
+
+    /**
+     * Generates an OPcache-friendly `<?php return [...];` from the bundle JSON —
+     * the flat map that `BundleLoader::normalize()` extracts (otherwise the mtime
+     * check would let an empty bundle through to runtime).
      *
      * Failure is not fatal — `BundleLoader` can fall back to JSON.
      */
