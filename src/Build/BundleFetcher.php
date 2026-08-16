@@ -147,9 +147,9 @@ final readonly class BundleFetcher
     }
 
     /**
-     * Generates an OPcache-friendly `<?php return [...];` from the bundle JSON —
-     * the flat map that `BundleLoader::normalize()` extracts (otherwise the mtime
-     * check would let an empty bundle through to runtime).
+     * Generates an OPcache-friendly `<?php return [...];` from the JSON that was
+     * just written. That JSON is already the canonical flat map — the envelope was
+     * dropped by `canonicalJson()` — so there is nothing left to unwrap here.
      *
      * Failure is not fatal — `BundleLoader` can fall back to JSON.
      */
@@ -168,17 +168,10 @@ final readonly class BundleFetcher
             return;
         }
 
-        if (isset($decoded['translations']) && is_array($decoded['translations'])) {
-            /** @var array<int|string, mixed> $source */
-            $source = $decoded['translations'];
-        } else {
-            $source = $decoded;
-        }
-
         $bundle = [];
-        foreach ($source as $k => $v) {
-            if (is_string($k) && is_string($v)) {
-                $bundle[$k] = $v;
+        foreach ($decoded as $key => $value) {
+            if (is_string($key) && is_string($value)) {
+                $bundle[$key] = $value;
             }
         }
 

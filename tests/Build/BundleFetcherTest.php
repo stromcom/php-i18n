@@ -149,6 +149,19 @@ final class BundleFetcherTest extends TestCase
         self::assertSame($first, $second);
     }
 
+    public function testWritesPrettyPrintedJsonWithUnescapedSlashesAndUnicode(): void
+    {
+        // Byte for byte: the file is a committed build input the publish gate diffs
+        // against the published bundle, so indentation and escaping are part of the
+        // contract, not a cosmetic detail.
+        $this->fetcher(new MockResponse($this->bundleBody(['nav/home' => 'Domů'])))->fetch('cs');
+
+        self::assertStringEqualsFile(
+            $this->bundlesDir() . '/cs.json',
+            "{\n    \"nav/home\": \"Domů\"\n}\n",
+        );
+    }
+
     public function testEmptyBundleIsWrittenAsAnObjectNotAnArray(): void
     {
         $this->fetcher(new MockResponse($this->bundleBody([])))->fetch('cs');
@@ -262,11 +275,18 @@ final class BundleFetcherTest extends TestCase
         self::assertNull($this->etags->get('cs'));
     }
 
-    public function testLogsTheWrite(): void
+    public function testLogsTheWriteWithTheLocalePathAndSizeOfWhatLandedOnDisk(): void
     {
         $this->fetcher(new MockResponse($this->bundleBody(['a' => 'A'])))->fetch('cs');
 
+        $path = $this->bundlesDir() . '/cs.json';
         self::assertTrue($this->logger->hasRecordContaining('info', 'BundleFetcher: written'));
+        // The size is the canonical file, not the response — the two differ since
+        // the envelope is stripped before the write.
+        self::assertSame(
+            ['locale' => 'cs', 'bytes' => strlen((string) file_get_contents($path)), 'path' => $path],
+            $this->logger->contextOfFirstContaining('BundleFetcher: written'),
+        );
     }
 
     // ------------------------------------------------------- conditional GET

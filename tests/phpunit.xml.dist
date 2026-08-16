@@ -1,10 +1,16 @@
 <?xml version="1.0" encoding="UTF-8"?>
+<!--
+    executionOrder omits "defects" on purpose: Infection re-runs this suite with
+    recordTestRunHistory="false", and since PHPUnit 13.2 that combination aborts
+    the run ("No tests executed!") instead of silently ignoring the ordering, so
+    the mutation job would fail before a single mutant is generated.
+-->
 <phpunit xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
          xsi:noNamespaceSchemaLocation="../vendor/phpunit/phpunit/phpunit.xsd"
          bootstrap="../vendor/autoload.php"
          colors="true"
          cacheDirectory="../.phpunit.cache"
-         executionOrder="depends,defects"
+         executionOrder="depends"
          failOnRisky="true"
          failOnWarning="true">
     <testsuites>
